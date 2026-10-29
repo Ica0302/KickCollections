@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../constants/app_colors.dart';
 import '../models/shoe.dart';
 import '../utils/price_format.dart';
+import 'shoe_image.dart';
 
 class CartRow extends StatelessWidget {
   const CartRow({
@@ -37,7 +38,7 @@ class CartRow extends StatelessWidget {
               color: const Color(0xFFF0F2F3),
               borderRadius: BorderRadius.circular(13),
             ),
-            child: Image.asset(shoe.image, fit: BoxFit.contain),
+            child: ShoeImage(shoe.image, fit: BoxFit.contain),
           ),
           const SizedBox(width: 12),
           Expanded(

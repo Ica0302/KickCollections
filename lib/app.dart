@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'constants/app_colors.dart';
-import 'data/shoe_catalog.dart';
 import 'models/shoe.dart';
+import 'services/item_service.dart';
 import 'services/payment_service.dart';
 import 'utils/payment_helper.dart';
 import 'utils/price_format.dart';
@@ -15,6 +16,7 @@ import 'widgets/product_grid.dart';
 import 'widgets/top_bar.dart';
 import 'widgets/bottom_bar.dart';
 import 'widgets/hero_banner.dart';
+import 'widgets/shoe_image.dart';
 
 class KicksCollectionApp extends StatefulWidget {
   const KicksCollectionApp({super.key});
@@ -31,12 +33,69 @@ class _KicksCollectionAppState extends State<KicksCollectionApp> {
   final Set<Shoe> _favorites = {};
   final Map<String, String> _userDetails = {};
   final PaymentService _payments = PaymentService();
+  final ItemService _items = ItemService();
+  List<Shoe> _shoes = [];
+  bool _itemsLoading = true;
+  String? _itemsError;
+  RealtimeChannel? _itemsChannel;
 
   int _selectedTab = 0;
   String _searchQuery = '';
   String _paymentMethod = 'Cash on Delivery';
   Shoe? _selectedShoe;
   bool _orderComplete = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _subscribeToItems();
+    _loadItems();
+  }
+
+  void _subscribeToItems() {
+    _itemsChannel = Supabase.instance.client
+        .channel('public-items-live')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'items',
+          callback: (_) => _loadItems(),
+        )
+        .subscribe();
+  }
+
+  @override
+  void dispose() {
+    final channel = _itemsChannel;
+    if (channel != null) {
+      Supabase.instance.client.removeChannel(channel);
+    }
+    super.dispose();
+  }
+
+  Future<void> _loadItems() async {
+    if (mounted) {
+      setState(() {
+        _itemsLoading = true;
+        _itemsError = null;
+      });
+    }
+
+    try {
+      final items = await _items.fetchActiveItems();
+      if (!mounted) return;
+      setState(() {
+        _shoes = items;
+        _itemsLoading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _itemsError = error.toString();
+        _itemsLoading = false;
+      });
+    }
+  }
 
   int get _cartCount =>
       _cart.values.fold(0, (total, quantity) => total + quantity);
@@ -109,12 +168,13 @@ class _KicksCollectionAppState extends State<KicksCollectionApp> {
   }
 
   Widget _buildHomePage() {
-    final visibleShoes = shoeCatalog.where((shoe) {
+    final visibleShoes = _shoes.where((shoe) {
       final searchableText = '${shoe.name} ${shoe.brand}'.toLowerCase();
       return searchableText.contains(_searchQuery.toLowerCase());
     }).toList();
 
     return ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(18, 12, 18, 22),
       children: [
         TextField(
@@ -155,6 +215,11 @@ class _KicksCollectionAppState extends State<KicksCollectionApp> {
               ),
             ),
             const Spacer(),
+            IconButton(
+              onPressed: _loadItems,
+              tooltip: 'Refresh items',
+              icon: const Icon(Icons.refresh, size: 21),
+            ),
             Text(
               '${visibleShoes.length} items',
               style: const TextStyle(
@@ -165,26 +230,33 @@ class _KicksCollectionAppState extends State<KicksCollectionApp> {
           ],
         ),
         const SizedBox(height: 14),
-        if (visibleShoes.isEmpty)
+        if (_itemsLoading && _shoes.isEmpty)
+          const Padding(
+            padding: EdgeInsets.all(32),
+            child: Center(child: CircularProgressIndicator()),
+          )
+        else if (_itemsError != null && _shoes.isEmpty)
+          _buildItemsError()
+        else if (visibleShoes.isEmpty)
           const Padding(
             padding: EdgeInsets.all(32),
             child: Center(child: Text('No sneakers found.')),
           ),
-        ProductGrid(
-          shoes: visibleShoes,
-          favorites: _favorites,
-          onOpen: _openShoe,
-          onFavorite: _toggleFavorite,
-          onAddToCart: _addToCart,
-        ),
+        if (_itemsError == null && visibleShoes.isNotEmpty)
+          ProductGrid(
+            shoes: visibleShoes,
+            favorites: _favorites,
+            onOpen: _openShoe,
+            onFavorite: _toggleFavorite,
+            onAddToCart: _addToCart,
+          ),
       ],
     );
   }
 
   Widget _buildListing({required bool favoritesOnly}) {
-    final shoes = favoritesOnly
-        ? shoeCatalog.where(_favorites.contains).toList()
-        : shoeCatalog;
+    final shoes =
+        favoritesOnly ? _shoes.where(_favorites.contains).toList() : _shoes;
 
     return ListView(
       padding: const EdgeInsets.all(18),
@@ -194,20 +266,56 @@ class _KicksCollectionAppState extends State<KicksCollectionApp> {
           style: const TextStyle(fontSize: 25, fontWeight: FontWeight.w800),
         ),
         const SizedBox(height: 16),
-        if (favoritesOnly && shoes.isEmpty)
+        if (_itemsLoading && _shoes.isEmpty)
+          const Padding(
+            padding: EdgeInsets.all(32),
+            child: Center(child: CircularProgressIndicator()),
+          )
+        else if (_itemsError != null && _shoes.isEmpty)
+          _buildItemsError()
+        else if (favoritesOnly && shoes.isEmpty)
           const EmptyState(
             icon: Icons.favorite_border,
             title: 'no favorites yet',
             subtitle: 'click heart icon to add to favorites.',
           ),
-        ProductGrid(
-          shoes: shoes,
-          favorites: _favorites,
-          onOpen: _openShoe,
-          onFavorite: _toggleFavorite,
-          onAddToCart: _addToCart,
-        ),
+        if (_itemsError == null && shoes.isNotEmpty)
+          ProductGrid(
+            shoes: shoes,
+            favorites: _favorites,
+            onOpen: _openShoe,
+            onFavorite: _toggleFavorite,
+            onAddToCart: _addToCart,
+          ),
       ],
+    );
+  }
+
+  Widget _buildItemsError() {
+    return Padding(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        children: [
+          const Text(
+            'Hindi ma-load ang mga item. Tingnan kung na-run na ang SQL at tama ang Supabase connection.',
+            textAlign: TextAlign.center,
+          ),
+          if (_itemsError != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              _itemsError!,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 11, color: muted),
+            ),
+          ],
+          const SizedBox(height: 12),
+          FilledButton.icon(
+            onPressed: () => _loadItems(),
+            icon: const Icon(Icons.refresh),
+            label: const Text('Subukan ulit'),
+          ),
+        ],
+      ),
     );
   }
 
@@ -217,9 +325,10 @@ class _KicksCollectionAppState extends State<KicksCollectionApp> {
     int selectedImage = 0;
     final galleryImages =
         shoe.galleryImages.isEmpty ? <String>[shoe.image] : shoe.galleryImages;
-    final galleryLabels = galleryImages.length == 4
-        ? const ['MAIN', 'SIDE', 'REAR', 'PROFILE']
-        : const ['SIDE', 'FRONT', 'BACK'];
+    final galleryLabels = List.generate(
+      galleryImages.length,
+      (index) => index == 0 ? 'MAIN' : 'VIEW ${index + 1}',
+    );
     Color selectedColor = shoe.color;
     final availableColors = <Color>[shoe.color];
 
@@ -251,7 +360,7 @@ class _KicksCollectionAppState extends State<KicksCollectionApp> {
                       child: Column(
                         children: [
                           Expanded(
-                            child: Image.asset(
+                            child: ShoeImage(
                               galleryImages[selectedImage],
                               fit: BoxFit.contain,
                               width: double.infinity,
@@ -284,7 +393,7 @@ class _KicksCollectionAppState extends State<KicksCollectionApp> {
                                     child: Column(
                                       children: [
                                         Expanded(
-                                          child: Image.asset(
+                                          child: ShoeImage(
                                             galleryImages[index],
                                             fit: BoxFit.contain,
                                           ),

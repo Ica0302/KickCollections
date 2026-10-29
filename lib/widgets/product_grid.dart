@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../constants/app_colors.dart';
 import '../models/shoe.dart';
 import '../utils/price_format.dart';
+import 'shoe_image.dart';
 
 class ProductGrid extends StatelessWidget {
   const ProductGrid({
@@ -83,7 +84,7 @@ class ProductCard extends StatelessWidget {
                     borderRadius: BorderRadius.circular(15),
                   ),
                   padding: const EdgeInsets.all(4),
-                  child: Image.asset(shoe.image, fit: BoxFit.contain),
+                  child: ShoeImage(shoe.image, fit: BoxFit.contain),
                 ),
               ),
               const SizedBox(height: 4),
